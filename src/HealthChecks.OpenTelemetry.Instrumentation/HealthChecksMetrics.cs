@@ -4,7 +4,10 @@ using System.Diagnostics.Metrics;
 using System.Reflection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
-internal class HealthChecksMetrics
+/// <summary>
+///     HealthChecks instrumentation.
+/// </summary>
+internal sealed class HealthChecksMetrics
 {
     internal static readonly AssemblyName AssemblyName = typeof(HealthChecksMetrics).Assembly.GetName();
 
@@ -21,12 +24,12 @@ internal class HealthChecksMetrics
 
         MeterInstance.CreateObservableGauge(options.StatusGaugeName,
             () => ProcessCachedReport((name, entry) => new Measurement<double>(HealthStatusToMetricValue(entry.Status),
-                new KeyValuePair<string, object?>("name", name))), "status",
+                GenerateTags(name, entry, options.IncludeHealthCheckMetadata))), "status",
             HealthChecksInstrumentationOptions.HealthCheckDescription);
 
         MeterInstance.CreateObservableGauge(options.DurationGaugeName,
             () => ProcessCachedReport((name, entry) => new Measurement<double>(entry.Duration.TotalSeconds,
-                new KeyValuePair<string, object?>("name", name))), "seconds",
+                GenerateTags(name, entry, options.IncludeHealthCheckMetadata))), "seconds",
             HealthChecksInstrumentationOptions.HealthCheckDurationDescription);
     }
 
@@ -57,5 +60,21 @@ internal class HealthChecksMetrics
             default:
                 throw new NotSupportedException($"Unexpected HealthStatus value: {status}");
         }
+    }
+
+    internal static KeyValuePair<string, object?>[] GenerateTags(string name, HealthReportEntry entry,
+        bool includeMetadata)
+    {
+        var tags = new List<KeyValuePair<string, object?>>
+        {
+            new("name", name)
+        };
+
+        if (includeMetadata)
+        {
+            tags.AddRange(entry.Data!);
+        }
+
+        return tags.ToArray();
     }
 }

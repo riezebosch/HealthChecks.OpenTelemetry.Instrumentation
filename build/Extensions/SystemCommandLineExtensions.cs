@@ -1,11 +1,16 @@
-﻿namespace build.Configuration;
+﻿namespace build.Extensions;
 
+using System;
 using System.CommandLine;
 using System.CommandLine.Builder;
+using System.CommandLine.Hosting;
 using System.CommandLine.Invocation;
 using System.CommandLine.IO;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Diagnostics;
 using System.Reflection;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 public static class SystemCommandLineExtensions
 {
@@ -14,12 +19,10 @@ public static class SystemCommandLineExtensions
         var workingDirectory = context.ParseResult
             .GetValueForOption(Program.WorkingDirectoryGlobalOption);
 
-        // get passed value or default to the directory that the executable is running in
+        // question: should we ever default to the directory that the executable is running in? Environment.ProcessPath
         // https://www.hanselman.com/blog/how-do-i-find-which-directory-my-net-core-console-application-was-started-in-or-is-running-from
         // https://stackoverflow.com/a/97491/7644876
-        // question: original method = Process.GetCurrentProcess().MainModule!.FileName
-        return workingDirectory?.FullName ??
-               Path.GetDirectoryName(Environment.ProcessPath) ?? Directory.GetCurrentDirectory();
+        return workingDirectory is { Exists: true } ? workingDirectory.FullName : Directory.GetCurrentDirectory();
     }
 
     public static void RegisterCommandsInAssembly(this RootCommand rootCommand, Assembly? assembly = null)
@@ -28,9 +31,13 @@ public static class SystemCommandLineExtensions
         var types = assembly.GetTypes().Where(type =>
             type is { IsClass: true, IsAbstract: false } &&
             type.IsSubclassOf(typeof(Command)) &&
-            type.GetConstructors().Any(info => !info.GetParameters().Any()));
+            type.GetConstructors().Any(info => !info.GetParameters().Any()) &&
+            type.GetCustomAttributes(typeof(NotMappedAttribute), false).Length == 0);
 
-        foreach (var type in types) rootCommand.AddCommand((Command)Activator.CreateInstance(type)!);
+        foreach (var type in types)
+        {
+            rootCommand.AddCommand((Command)Activator.CreateInstance(type)!);
+        }
     }
 
     // removed in https://github.com/dotnet/command-line-api/pull/1585
@@ -62,7 +69,10 @@ public static class SystemCommandLineExtensions
                     // DebugDirectiveAttachToProcess
                     context.Console.Out.WriteLine(string.Format("Attach your debugger to process {0} ({1}).", processId,
                         process.ProcessName));
-                    while (!Debugger.IsAttached) await Task.Delay(500);
+                    while (!Debugger.IsAttached)
+                    {
+                        await Task.Delay(500);
+                    }
                 }
                 else
                 {
@@ -76,7 +86,24 @@ public static class SystemCommandLineExtensions
             }
 
             await next(context);
-        }, MiddlewareOrder.ExceptionHandler);
+        }, (MiddlewareOrder)(-2300));
+
+        return builder;
+    }
+
+    public static CommandLineBuilder UseConfigurationDirective(this CommandLineBuilder builder)
+    {
+        builder.AddMiddleware(async (context, next) =>
+        {
+            if (context.ParseResult.Directives.Contains("config"))
+            {
+                var configuration =
+                    context.GetHost().Services.GetRequiredService<IConfiguration>() as IConfigurationRoot;
+                context.Console.Out.WriteLine(configuration!.GetDebugView());
+            }
+
+            await next(context);
+        });
 
         return builder;
     }

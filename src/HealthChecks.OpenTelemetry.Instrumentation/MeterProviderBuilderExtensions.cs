@@ -6,7 +6,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 
 /// <summary>
-/// Extension methods to simplify registering of dependency instrumentation.
+///     Extension methods to simplify registering of dependency instrumentation.
 /// </summary>
 public static class MeterProviderBuilderExtensions
 {

@@ -5,7 +5,9 @@ using global::OpenTelemetry;
 using global::OpenTelemetry.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Xunit.Categories;
 
+[UnitTest(nameof(HealthChecksMetrics))]
 public class HealthChecksMetricsTests
 {
     private const int MaxTimeToAllowForFlush = 10000;

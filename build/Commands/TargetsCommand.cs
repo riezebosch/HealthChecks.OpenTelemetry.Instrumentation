@@ -1,77 +1,144 @@
 ﻿namespace build.Commands;
 
 using System.CommandLine;
+using System.CommandLine.Hosting;
 using System.CommandLine.Invocation;
+using System.CommandLine.IO;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Bullseye;
+using Extensions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileSystemGlobbing;
 using static Bullseye.Targets;
 using static SimpleExec.Command;
 
-public class TargetsCommand : Command
+public sealed class TargetsCommand : Command
 {
-    private const string ArtifactsDirectory = ".artifacts";
+    private static readonly Option<string> AdditionalArgumentsOption =
+        new(new[] { "--additional-args", "-a" }, "Additional arguments to be processed by the targets");
 
     private static readonly Option<string> ConfigurationOption =
         new(new[] { "--configuration", "-C" }, () => "Release", "The configuration to run the target");
 
     public TargetsCommand() : base("targets", "Execute build targets")
     {
+        AddOption(AdditionalArgumentsOption);
         AddOption(ConfigurationOption);
+
         ImportBullseyeConfigurations();
 
         this.SetHandler(async context =>
         {
+            // pre-processing
+            var provider = context.GetHost().Services;
+            var options = provider.GetRequiredService<TargetsCommandOptions>();
+            var additionalArgs = context.ParseResult.GetValueForOption(AdditionalArgumentsOption);
             var configuration = context.ParseResult.GetValueForOption(ConfigurationOption);
-            var testOutputPath = Path.Combine(ArtifactsDirectory, "test-results");
-            var reportsOutputPath = Path.Combine(ArtifactsDirectory, "coveragereport");
+            var workingDirectory = context.GetWorkingDirectory();
 
-            Target(Targets.RestoreTools, async () => { await RunAsync("dotnet", "tool restore"); });
+            // find most-explicit project/solution path for dotnet commands
+            // ref: https://developercommunity.visualstudio.com/t/docker-compose-project-confuses-dotnet-build/615379
+            // ref: https://developercommunity.visualstudio.com/t/multiple-docker-compose-dcproj-in-a-visual-studio/252877
+            var findDotnetSolution = Directory.GetFiles(workingDirectory).FirstOrDefault(s => s.EndsWith(".sln")) ??
+                                     string.Empty;
+            var dotnetSolutionPath = Path.Combine(workingDirectory, findDotnetSolution);
 
-            Target(Targets.CleanArtifactsOutput, () =>
+            Target(Targets.RestoreTools, "Restore .NET command line tools",
+                async () => { await RunAsync("dotnet", "tool restore"); });
+
+            Target(Targets.CleanArtifactsOutput, "Delete all artifacts and folder", () =>
             {
-                if (Directory.Exists(ArtifactsDirectory))
+                if (Directory.Exists(options.ArtifactsDirectory))
                 {
-                    Directory.Delete(ArtifactsDirectory, true);
+                    Directory.Delete(options.ArtifactsDirectory, true);
                 }
             });
 
-            Target(Targets.CleanBuildOutput,
-                async () => { await RunAsync("dotnet", $"clean -c {configuration} -v m --nologo"); });
-
-            Target(Targets.CleanAll,
-                DependsOn(Targets.CleanArtifactsOutput, Targets.CleanBuildOutput));
-
-            Target(Targets.Build, DependsOn(Targets.CleanBuildOutput),
-                async () => { await RunAsync("dotnet", $"build -c {configuration} --nologo"); });
-
-            Target(Targets.Pack, DependsOn(Targets.CleanArtifactsOutput, Targets.Build), async () =>
+            Target(Targets.CleanTestsOutput, "Delete all test artifacts and folder", () =>
             {
-                await RunAsync("dotnet",
-                    $"pack -c {configuration} -o {Directory.CreateDirectory(ArtifactsDirectory).FullName} --no-build --nologo");
+                if (Directory.Exists(options.TestResultsDirectory))
+                {
+                    Directory.Delete(options.TestResultsDirectory, true);
+                }
             });
 
-            Target(Targets.PublishArtifacts, DependsOn(Targets.Pack), () => Console.WriteLine("publish artifacts"));
+            Target(Targets.CleanBuildOutput, "Clear solution of all build artifacts",
+                async () =>
+                {
+                    await RunAsync("dotnet", $"clean {dotnetSolutionPath} -c {configuration} -v m --nologo");
+                });
 
-            Target("default", DependsOn(Targets.RunTests, Targets.PublishArtifacts));
+            Target(Targets.CleanAll, "Execute all 'Clean' operations",
+                DependsOn(Targets.CleanArtifactsOutput, Targets.CleanTestsOutput, Targets.CleanBuildOutput));
 
-            Target(Targets.RunTests, DependsOn(Targets.Build), async () =>
+            Target(Targets.Build, "Build all projects in the solution", DependsOn(Targets.CleanBuildOutput),
+                async () => { await RunAsync("dotnet", $"build {dotnetSolutionPath} -c {configuration} --nologo"); });
+
+            Target(Targets.Pack, "Package projects for deployment",
+                DependsOn(Targets.CleanArtifactsOutput, Targets.Build), async () =>
+                {
+                    await RunAsync("dotnet",
+                        $"pack {dotnetSolutionPath} -c {configuration} -o {Directory.CreateDirectory(options.ArtifactsDirectory).FullName} --no-build --nologo");
+                });
+
+            Target(Targets.PublishArtifacts, "Publish artifacts", DependsOn(Targets.Pack), async () =>
             {
                 await RunAsync("dotnet",
-                    $"test -c {configuration} --no-build --nologo --collect:\"XPlat Code Coverage\" --results-directory {testOutputPath}");
+                    $"nuget push .\\{options.ArtifactsDirectory}\\*.nupkg --api-key {options.Nuget.ApiKey} --source {options.Nuget.Source} --skip-duplicate");
             });
 
-            Target(Targets.RunTestsCoverage, DependsOn(Targets.RestoreTools, Targets.RunTests), () =>
+            Target("default", DependsOn(Targets.RunTests, Targets.Pack));
+
+            Target(Targets.RunTests, "Run automated tests for the solution",
+                DependsOn(Targets.CleanTestsOutput, Targets.Build), async () =>
+                {
+                    await RunAsync("dotnet",
+                        $"test {dotnetSolutionPath} -c {configuration} --no-build --nologo --collect:\"XPlat Code Coverage\" --results-directory {options.TestResultsDirectory} {additionalArgs}");
+                });
+
+            Target(Targets.RunTestsCoverage, "Run automated tests for the solution and generate code coverage report",
+                DependsOn(Targets.RestoreTools, Targets.RunTests), () =>
+                    Run("dotnet",
+                        $"reportgenerator -reports:{options.TestResultsDirectory}/**/*cobertura.xml -targetdir:{options.TestResultsDirectory}/coveragereport -reporttypes:HtmlSummary"));
+
+            Target(Targets.LaunchTestsCoverage, "Launch code coverage report in browser", DependsOn(Targets.RunTestsCoverage), () =>
             {
-                Run("dotnet",
-                    $"reportgenerator -reports:{testOutputPath}/**/*cobertura.xml -targetdir:{reportsOutputPath} -reporttypes:HtmlInline;TextSummary");
+                Matcher matcher = new();
+                matcher.AddInclude("**/summary.html");
+                var summaryReportPath = matcher.GetResultsInFullPath(options.TestResultsDirectory).FirstOrDefault();
 
-                // Print text summary to console
-                var readText = File.ReadAllText(Path.Combine(reportsOutputPath, "Summary.txt"));
-                context.Console.WriteLine(readText);
+                if (string.IsNullOrWhiteSpace(summaryReportPath))
+                {
+                    return;
+                }
 
-                //OpenUrl(Path.Combine(reportsOutputPath, "index.html"));
+                var psi = new ProcessStartInfo();
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    psi.FileName = "open";
+                    psi.ArgumentList.Add(summaryReportPath);
+                }
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    psi.FileName = "xdg-open";
+                    psi.ArgumentList.Add(summaryReportPath);
+                }
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    psi.FileName = "cmd";
+                    psi.ArgumentList.Add("/C");
+                    psi.ArgumentList.Add("start");
+                    psi.ArgumentList.Add(summaryReportPath);
+                }
+                else
+                {
+                    context.Console.Error.WriteLine(
+                        "Could not determine how to launch the browser for this OS platform.");
+                    return;
+                }
 
+                Process.Start(psi);
             });
 
             await RunBullseyeTargetsAsync(context);
@@ -87,7 +154,9 @@ public class TargetsCommand : Command
         });
 
         foreach (var (aliases, description) in Bullseye.Options.Definitions)
+        {
             Add(new Option<bool>(aliases.ToArray(), description));
+        }
     }
 
     private async Task RunBullseyeTargetsAsync(InvocationContext context)
@@ -98,37 +167,19 @@ public class TargetsCommand : Command
                 .Single(option => option.HasAlias(definition.Aliases[0]))))));
         await RunTargetsWithoutExitingAsync(targets, options);
     }
-
-    private void OpenUrl(string url)
-    {
-        // todo: need detection for CI execution
-        // ref: https://stackoverflow.com/a/43232486
-        // ref: https://github.com/dotnet/corefx/issues/10361
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            url = url.Replace("&", "^&");
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            Process.Start("xdg-open", url);
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            Process.Start("open", url);
-        }
-    }
 }
 
 internal static class Targets
 {
-    public const string RunTestsCoverage = "run-tests-coverage";
-    public const string RestoreTools = "restore-tools";
-    public const string CleanBuildOutput = "clean-build-output";
-    public const string CleanArtifactsOutput = "clean-artifacts-output";
-    public const string CleanAll = "clean";
     public const string Build = "build";
-    public const string RunTests = "run-tests";
+    public const string CleanAll = "clean";
+    public const string CleanArtifactsOutput = "clean-artifacts-output";
+    public const string CleanBuildOutput = "clean-build-output";
+    public const string CleanTestsOutput = "clean-test-output";
+    public const string LaunchTestsCoverage = "launch-tests-coverage";
     public const string Pack = "pack";
     public const string PublishArtifacts = "publish-artifacts";
+    public const string RestoreTools = "restore-tools";
+    public const string RunTests = "run-tests";
+    public const string RunTestsCoverage = "run-tests-coverage";
 }

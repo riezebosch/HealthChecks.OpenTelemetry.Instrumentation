@@ -4,13 +4,20 @@
 [![NuGet download count badge](https://img.shields.io/nuget/dt/HealthChecks.OpenTelemetry.Instrumentation)](https://www.nuget.org/packages/HealthChecks.OpenTelemetry.Instrumentation)
 [![feedz.io](https://img.shields.io/badge/endpoint.svg?url=https%3A%2F%2Ff.feedz.io%2Fgowon%2Fpre-release%2Fshield%2FHealthChecks.OpenTelemetry.Instrumentation%2Flatest)](https://f.feedz.io/gowon/pre-release/packages/HealthChecks.OpenTelemetry.Instrumentation/latest/download)
 
-This is an [Instrumentation Library](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/glossary.md#instrumentation-library), which instruments [Microsoft.Extensions.Diagnostics.HealthChecks](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks) and collect telemetry about the application health checks.
+This is an [Instrumentation Library](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/glossary.md#instrumentation-library), which instruments [Microsoft.Extensions.Diagnostics.HealthChecks](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks) and collect metrics about the application health checks.
+
+> [!CAUTION]
+> This component is based on the `v1.25` OpenTelemetry semantic conventions for [metrics](https://github.com/open-telemetry/semantic-conventions/blob/v1.25.0/docs/general/metrics.md). These conventions are [Mixed](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/document-status.md), and hence, this package is a [pre-release](https://github.com/open-telemetry/opentelemetry-dotnet/blob/main/VERSIONING.md#pre-releases). Until a [stable version](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/telemetry-stability.md) is released, there can be breaking changes. You can track the progress from [milestones](https://github.com/gowon/HealthChecks.OpenTelemetry.Instrumentation/milestone/1).
+
+## Supported .NET Versions
+
+This package targets [`netstandard2.0`](https://docs.microsoft.com/dotnet/standard/net-standard#net-implementation-support) and hence can be used in any .NET versions implementing `netstandard2.0`.
 
 ## Steps to enable HealthChecks.OpenTelemetry.Instrumentation
 
 ### Step 1: Install package
 
-Add a reference to the [`HealthChecks.OpenTelemetry.Instrumentation`](https://www.nuget.org/packages/HealthChecks.OpenTelemetry.Instrumentation) package.
+Add a reference to the [`HealthChecks.OpenTelemetry.Instrumentation`](https://www.nuget.org/packages/HealthChecks.OpenTelemetry.Instrumentation) package:
 
 ```shell
 dotnet add package HealthChecks.OpenTelemetry.Instrumentation
@@ -42,27 +49,28 @@ Refer to [Program.cs](samples/SampleApi/Program.cs) for a complete demo.
 
 ### Advanced configuration
 
-This instrumentation can be configured to change the default behavior by using `HealthChecksInstrumentationOptions`.
+This instrumentation can be configured to change the default behavior by using `HealthChecksInstrumentationOptions`:
 
 ```csharp
-services.AddOpenTelemetry()
-    .WithMetrics(builder => builder
-        .AddHealthChecksInstrumentation(options =>
-        {
-            options.StatusGaugeName = "myapp_health";
-            options.DurationGaugeName = "myapp_health_duration";
-        })
-        .AddConsoleExporter());
+using var meterProvider = Sdk.CreateMeterProviderBuilder()
+    .AddHealthChecksInstrumentation(options =>
+    {
+        options.StatusGaugeName = "myapp.health";
+        options.DurationGaugeName = "myapp.health.duration";
+        options.IncludeHealthCheckMetadata = true;
+    })
+    .AddConsoleExporter()
+    .Build();
 ```
 
-When used with [`OpenTelemetry.Extensions.Hosting`](https://github.com/open-telemetry/opentelemetry-dotnet/blob/main/src/OpenTelemetry.Extensions.Hosting/README.md), all configurations to `HealthChecksInstrumentationOptions` can be done in the `ConfigureServices` method of you applications `Startup` class as shown below.
+When used with [`OpenTelemetry.Extensions.Hosting`](https://github.com/open-telemetry/opentelemetry-dotnet/blob/main/src/OpenTelemetry.Extensions.Hosting/README.md), all configurations to `HealthChecksInstrumentationOptions` can be done in the `ConfigureServices` method of you applications `Startup` class as shown below:
 
 ```csharp
-// Configure
 services.Configure<HealthChecksInstrumentationOptions>(options =>
 {
-    options.StatusGaugeName = "myapp_health";
-    options.DurationGaugeName = "myapp_health_duration";
+    options.StatusGaugeName = "myapp.health";
+    options.DurationGaugeName = "myapp.health.duration";
+    options.IncludeHealthCheckMetadata = true;
 });
 
 services.AddOpenTelemetry()
@@ -73,7 +81,7 @@ services.AddOpenTelemetry()
 
 ## Metrics
 
-### aspnetcore_healthcheck
+### aspnetcore.healthcheck
 
 Gets the health status of the component that was checked, converted to double value (0 == Unhealthy, 0.5 == Degraded, 1 == Healthy).
 
@@ -85,7 +93,7 @@ The API used to retrieve the value is:
 
 - [HealthReportEntry.Status](https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.diagnostics.healthchecks.healthreportentry.status): Gets the health status of the component that was checked.
 
-### aspnetcore_healthcheck_duration
+### aspnetcore.healthcheck.duration
 
 Gets the health check execution duration.
 

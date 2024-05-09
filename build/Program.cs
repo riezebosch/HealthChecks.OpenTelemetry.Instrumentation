@@ -6,16 +6,18 @@ using System.CommandLine.Help;
 using System.CommandLine.Hosting;
 using System.CommandLine.IO;
 using System.CommandLine.Parsing;
-using Configuration;
-using Extensions.Options.AutoBinder;
+using Extensions;
+using global::Extensions.Options.AutoBinder;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Debug;
+using Spectre.Console;
 
 internal static class Program
 {
-    public static string DefaultConfigFile = "buildconfig.json";
+    public const string DefaultConfigFile = "buildconfig.json";
     public static Option<FileInfo> ConfigurationFileGlobalOption = new("--config-file", "Specify configuration file");
 
     public static Option<DirectoryInfo>
@@ -37,7 +39,10 @@ internal static class Program
             command.SetHandler(context =>
             {
                 // ref: https://github.com/dotnet/command-line-api/issues/1537
-                context.HelpBuilder.CustomizeLayout(_ => HelpBuilder.Default.GetLayout().Skip(1));
+                context.HelpBuilder.CustomizeLayout(_ =>
+                    HelpBuilder.Default.GetLayout().Skip(1).Prepend(
+                        _ => AnsiConsole.Write(new FigletText("build tool").LeftJustified()
+                            .Color(Color.DarkBlue))));
                 context.HelpBuilder.Write(context.ParseResult.CommandResult.Command,
                     context.Console.Out.CreateTextWriter());
             });
@@ -46,6 +51,7 @@ internal static class Program
                 .UseHost(CreateHostBuilder)
                 .UseDefaults()
                 .UseDebugDirective()
+                .UseConfigurationDirective()
                 .UseExceptionHandler((exception, context) =>
                 {
                     Console.WriteLine($"Unhandled exception occurred: {exception.Message}");
@@ -62,32 +68,50 @@ internal static class Program
         }
     }
 
-    public static IHostBuilder CreateHostBuilder(string[] args)
+    // ref: https://github.com/dotnet/command-line-api/issues/2250
+    // ref: https://github.com/dotnet/command-line-api/issues/1838#issuecomment-1242435714
+    private static IHostBuilder CreateHostBuilder(string[] args)
     {
-        return Host.CreateDefaultBuilder(args)
+        HostBuilder builder = new();
+
+        return builder
+            .UseContentRoot(Directory.GetCurrentDirectory())
+            .UseServiceProviderFactory(
+                new DefaultServiceProviderFactory(new ServiceProviderOptions
+                {
+                    ValidateOnBuild = true,
+                    ValidateScopes = true
+                }))
             .ConfigureAppConfiguration((context, config) =>
             {
+                var basePath = context.GetInvocationContext().GetWorkingDirectory();
+
+                config
+                    .SetBasePath(basePath)
+                    .AddJsonFile(DefaultConfigFile, true, false)
+                    .AddJsonFile($"{DefaultConfigFile}.user", true, false);
+
                 var fileInfo = context.GetInvocationContext().ParseResult
                     .GetValueForOption(ConfigurationFileGlobalOption);
 
-                var basePath = context.GetInvocationContext().GetWorkingDirectory();
+                if (fileInfo is { Exists: true })
+                {
+                    config.AddJsonFile(fileInfo.FullName, true, false);
+                }
 
-                var configFilePath = fileInfo is { Exists: true }
-                    ? fileInfo.FullName
-                    : DefaultConfigFile;
-
-                config
-                    .SetBasePath(basePath!)
-                    .AddJsonFile(configFilePath, true, false)
-                    .AddEnvironmentVariables();
+                config.AddEnvironmentVariables("BUILD_");
             })
-            .ConfigureLogging((context, builder) =>
+            .ConfigureLogging((context, loggingBuilder) =>
             {
                 var logLevel = context.GetInvocationContext().ParseResult
                     .GetValueForOption(VerbosityGlobalOption);
-                builder.SetMinimumLevel(logLevel);
-                builder.AddFilter<DebugLoggerProvider>(level => level >= LogLevel.Debug);
+
+                loggingBuilder
+                    .SetMinimumLevel(logLevel)
+                    .AddDebug()
+                    .AddConsole()
+                    .AddFilter<DebugLoggerProvider>(level => level >= LogLevel.Debug);
             })
-            .ConfigureServices((context, services) => { services.AutoBindOptions(); });
+            .ConfigureServices((_, services) => { services.AutoBindOptions(); });
     }
 }

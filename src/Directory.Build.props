@@ -3,11 +3,9 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
-  <ItemGroup>
-    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
-        <_Parameter1>$(AssemblyName).Tests</_Parameter1>
-    </AssemblyAttribute>
-  </ItemGroup>
+  <PropertyGroup Condition="'$(CI_BUILD)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
 
   <PropertyGroup Label="NuspecProperties">
 		<Authors>Gowon Patterson</Authors>
@@ -20,6 +18,10 @@
 		<!-- <PackageTags>metrics healthchecks opentelemetry</PackageTags> -->
 		<PackageProjectUrl>https://github.com/gowon/HealthChecks.OpenTelemetry.Instrumentation</PackageProjectUrl>
 	</PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="$(AssemblyName).Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="GitVersion.MsBuild" Version="5.12.0">
