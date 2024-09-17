@@ -55,7 +55,7 @@ This instrumentation can be configured to change the default behavior by using `
 using var meterProvider = Sdk.CreateMeterProviderBuilder()
     .AddHealthChecksInstrumentation(options =>
     {
-        options.StatusGaugeName = "myapp.health";
+        options.StatusGaugeName = "myapp.health.status";
         options.DurationGaugeName = "myapp.health.duration";
         options.IncludeHealthCheckMetadata = true;
     })
